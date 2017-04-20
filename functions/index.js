@@ -11,8 +11,15 @@ exports.processAgenda = functions.database.ref("/permissions/{agenda}/{user}").o
         data.forEach(function(agenda) {
           if (agenda.key !== event.params.agenda) {
             return agenda.forEach(function(child) {
-              if (child.key) {
+              if (child.key === event.params.agenda) {
                 child.ref.remove();
+
+                if (data.child(event.params.agenda).exists()) {
+                  data.child(event.params.agenda).forEach(function(childOfRemoved) {
+                    agenda.ref.child(childOfRemoved.key).set(true);
+                  });
+                }
+
                 return true;
               }
             });
