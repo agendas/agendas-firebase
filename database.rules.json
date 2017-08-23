@@ -4,48 +4,64 @@
       "$uid": {
         "username": {
           ".read": "auth !== null",
-          ".write": "$uid === auth.uid && (!data.exists() || root.child('usernames').child(data.val()).exists())",
+          ".write": "$uid === auth.uid && (!data.exists() || !root.child('usernames').child(data.val()).exists())",
           ".validate": "newData.isString() && newData.val().length < 50"
         },
 				"agendas": {
           ".read": "$uid === auth.uid",
-          ".write": "$uid === auth.uid",
-          "root": {
-            "$child": {
-              ".validate": "root.child('permissions').child($child).hasChild($uid)"
-            }
-          },
           "$agenda": {
+            ".write": "root.child('permissions').child($agenda).child(auth.uid).val() === 'editor'",
             ".validate": "root.child('permissions').child($agenda).hasChild($uid)",
-            "$child": {
-              ".validate": "root.child('permissions').child($child).hasChild($uid)"
+          }
+        },
+        "createdApps": {
+          ".read": "$uid === auth.uid",
+          "$app": {
+            ".validate": "newData.isBoolean() && newData.val() === true"
+          }
+        },
+        "maxApps": {
+          ".read": "$uid === auth.uid"
+				},
+        "apps": {
+          ".read": "$uid === auth.uid",
+          ".validate": "newData.hasChildren()",
+          "$app": {
+            ".write": "$uid === auth.uid && !newData.exists()",
+            ".validate": "newData.hasChildren() && root.child('apps').child($app).exists()",
+            "scopes": {
+              ".write": "$uid === auth.uid",
+              ".validate": "newData.hasChildren()",
+              "$scope": {
+                ".validate": "newData.isBoolean() && newData.val() === true"
+							}
             }
           }
-        },
-        "settings": {
-          ".read": "$uid === auth.uid",
-          ".write": "$uid === auth.uid",
-          "wallpaper": {
-            ".validate": "newData.isString() && newData.val().length < 500"
-          },
-          "alwaysShowCompleted": {
-            ".validate": "newData.isBoolean()"
-					},
-          "schedules": {
-            ".validate": "newData.isBoolean()"
-          },
-          "theme": {
-            ".validate": "(newData.val() === 'default') || (data.parent().parent().child('premium').exists() && (newData.val() === 'dark' || newData.val() === 'forest' || newData.val() === 'ocean'))"
-          },
-          "$other": {
-            ".validate": false
-          }
-        },
-        "premium": {
-          ".read": "$uid === auth.uid"
-        }
+				}
       }
     },
+
+    "apps": {
+			"$app": {
+        "owner": {
+          ".read": "auth !== null",
+          ".write": "root.child('users').child(auth.uid).child('createdApps').hasChild($app) && newData.exists()",
+          ".validate": "newData.isString() && newData.val() === auth.uid"
+				},
+        "name": {
+          ".read": "auth !== null",
+          ".write": "data.parent().child('owner').val() === auth.uid"
+        },
+        "oauth": {
+          "redirect": {
+            ".write": "data.parent().parent().child('owner').val() === auth.uid",
+            ".validate": "newData.isString() && newData.val().length < 1000"
+					}
+        },
+        ".read": "data.child('owner').val() === auth.uid",
+        ".write": "root.child('users').child(auth.uid).child('createdApps').hasChild($app) && !newData.exists()"
+      }
+		},
 
     "usernames": {
       "$username": {
@@ -75,6 +91,25 @@
       }
     },
 
+    "categories": {
+      "$agenda": {
+        ".read": "root.child('permissions').child($agenda).hasChild(auth.uid)",
+        ".write": "root.child('permissions').child($agenda).child(auth.uid).val() === 'editor'",
+        ".validate": "root.child('agendas').hasChild($agenda)",
+        "$category": {
+          "name": {
+            ".validate": "newData.isString()"
+          },
+          "color": {
+            ".validate": "newData.isString()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+
     "tasks": {
       "$agenda": {
         ".read": "root.child('permissions').child($agenda).hasChild(auth.uid)",
@@ -93,6 +128,9 @@
           "deadlineTime": {
             ".validate": "newData.isBoolean()"
           },
+          "category": {
+            ".validate": "root.child('categories').child($agenda).hasChild(newData.val())"
+          },
           "notes": {
             ".validate": "newData.isString()"
           },
@@ -101,6 +139,12 @@
           },
           "repeatEnds": {
             ".validate": "newData.isString()"
+          },
+          "tags": {
+            ".validate": "newData.hasChildren()",
+            "$tag": {
+              ".validate": "root.child('categories').child($agenda).hasChild($tag) && newData.val() === true"
+						}
           },
           "$other": {
             ".validate": false
