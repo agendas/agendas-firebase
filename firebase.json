@@ -16,6 +16,34 @@
       {
         "source": "/api/v1/allowapp",
         "function": "allowapp"
+      },
+      {
+        "source": "/api/v1/verify",
+        "function": "verify"
+      },
+      {
+        "source": "/api/v1/agendas",
+        "function": "agendas"
+      },
+      {
+        "source": "/api/v1/agendas/?*",
+        "function": "agenda"
+      },
+      {
+        "source": "/api/v1/tags/?*",
+        "function": "tags"
+      },
+      {
+        "source": "/api/v1/tags/?*/?*",
+        "function": "tag"
+      },
+      {
+        "source": "/api/v1/tasks/?*",
+        "function": "tasks"
+      },
+      {
+        "source": "/api/v1/tasks/?*/?*",
+        "function": "task"
       }
     ]
   },
