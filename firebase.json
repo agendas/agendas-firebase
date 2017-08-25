@@ -12,6 +12,10 @@
       {
         "source": "/api/v1/authorize",
         "function": "authorize"
+      },
+      {
+        "source": "/api/v1/allowapp",
+        "function": "allowapp"
       }
     ]
   },
