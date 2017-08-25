@@ -2,6 +2,19 @@
   "functions": {
     "source": "functions"
   },
+  "hosting": {
+    "public": "hosting",
+    "rewrites": [
+      {
+        "source": "/api/v1/ping",
+        "function": "ping"
+      },
+      {
+        "source": "/api/v1/authorize",
+        "function": "authorize"
+      }
+    ]
+  },
   "database": {
     "rules": "database.rules.json"
   }

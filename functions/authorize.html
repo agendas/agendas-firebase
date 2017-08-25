@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html class="mdc-typography">
+  <head>
+    <meta charset="utf-8">
+    <title>Authorize {{name}}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/material-components-web/dist/material-components-web.min.css">
+    <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    .login, .form {
+      display: none;
+      margin-left: auto;
+      margin-right: auto;
+      margin-top: 2em;
+      width: calc(100% - 32px);
+      max-width: 480px;
+    }
+
+    .login .mdc-button {
+      display: block;
+      margin-top: 1em;
+    }
+
+    .form p, .form li, .form form {
+      margin-top: 1em;
+    }
+
+    .mdc-toolbar__section--align-end {
+      display: none;
+      align-items: center;
+      padding-right: 1em;
+    }
+
+    #signout-button {
+      margin-left: 1em;
+    }
+
+    #google-button, #deny-button, #signout-button {
+      background-color: #F44336;
+    }
+
+    #allow-button {
+      background-color: #43A047;
+    }
+
+    #github-button {
+      background-color: #607D8B;
+    }
+    </style>
+    <script src="https://www.gstatic.com/firebasejs/4.3.0/firebase.js"></script>
+    <script>
+      // Initialize Firebase
+      var config = {
+        apiKey: "AIzaSyCKVrro03usV3StlEq5Hu7FAdSOoSM9RVg",
+        authDomain: "agendas-1293.firebaseapp.com",
+        databaseURL: "https://agendas-1293.firebaseio.com",
+        projectId: "agendas-1293",
+        storageBucket: "agendas-1293.appspot.com",
+        messagingSenderId: "153820900287"
+      };
+      firebase.initializeApp(config);
+    </script>
+    <script>
+      var GoogleAuthProvider = new firebase.auth.GoogleAuthProvider();
+      var GithubAuthProvider = new firebase.auth.GithubAuthProvider();
+      var scopes = {{{scopes}}};
+      window.addEventListener("load", function() {
+        firebase.auth().onAuthStateChanged(function(user) {
+          if (user) {
+            document.querySelector(".login").style.display = "none";
+            document.querySelector("#email").innerText = user.email;
+            document.querySelector(".mdc-toolbar__section--align-end").style.display = "inline-flex";
+            user.getToken(true).then(function(token) {
+              document.querySelector("input[name='firebase_token']").value = token;
+              document.querySelector(".form").style.display = "block";
+            });
+          } else {
+            document.querySelector(".form").style.display = "none";
+            document.querySelector(".mdc-toolbar__section--align-end").style.display = "none";
+            document.querySelector(".login").style.display = "block";
+          }
+        });
+
+        document.querySelector("form > a").setAttribute("href", {{{redirectURL}}} + "?error=access_denied");
+
+        document.querySelector("#google-button").addEventListener("click", function() {
+          firebase.auth().signInWithPopup(GoogleAuthProvider);
+        });
+
+        document.querySelector("#github-button").addEventListener("click", function() {
+          firebase.auth().signInWithPopup(GithubAuthProvider);
+        });
+
+        document.querySelector("#signout-button").addEventListener("click", function() {
+          firebase.auth().signOut();
+        });
+      });
+    </script>
+  </head>
+  <body>
+    <header class="mdc-toolbar">
+      <div class="mdc-toolbar__row">
+        <section class="mdc-toolbar__section mdc-toolbar__section--align-start">
+          <h1 class="mdc-toolbar__title">Agendas</h1>
+        </section>
+        <section class="mdc-toolbar__section mdc-toolbar__section--align-end">
+          <span id="email"></span>
+          <button class="mdc-button mdc-button--raised" id="signout-button">Sign out</button>
+        </section>
+      </div>
+    </header>
+    <div class="login">
+      <h3 class="mdc-typography--display1">Please sign in</h3>
+      <p>Your login details will not be shared with {{name}}.</p>
+      <button class="mdc-button mdc-button--raised" id="google-button">Sign in with Google</button>
+      <button class="mdc-button mdc-button--raised" id="github-button">Sign in with Github</button>
+    </div>
+    <div class="form">
+      <h2 class="mdc-typography--headline">Allow {{name}} to access your account?</h2>
+      <p class="mdc-typography--title">{{name}} will be able to:</p>
+      <ul>
+        {{#scopeText}}
+          <li>{{text}}</li>
+        {{/scopeText}}
+      </ul>
+      <form method="post" action="/api/v1/allowapp">
+        <input type="hidden" name="client_id" value="{{clientId}}" />
+        <input type="hidden" name="redirect_url" value="{{redirectURL}}" />
+        <input type="hidden" name="scopes" value="{{scopes}}" />
+        <input type="hidden" name="state" value="{{state}}" />
+        <input type="hidden" name="firebase_token" />
+        <a class="mdc-button mdc-button--raised" id="deny-button">Deny</a>
+        <button class="mdc-button mdc-button--raised" id="allow-button" type="submit">Allow</button>
+      </form>
+    </div>
+  </body>
+</html>

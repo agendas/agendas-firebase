@@ -11,7 +11,7 @@
           ".read": "$uid === auth.uid",
           "$agenda": {
             ".write": "root.child('permissions').child($agenda).child(auth.uid).val() === 'editor'",
-            ".validate": "root.child('permissions').child($agenda).hasChild($uid)",
+            ".validate": "root.child('permissions').child($agenda).hasChild($uid)"
           }
         },
         "createdApps": {
@@ -87,7 +87,7 @@
         ".validate": "root.child('agendas').hasChild($agenda)",
         "$uid": {
           ".validate": "newData.val() === 'viewer' || newData.val() === 'editor'"
-        },
+        }
       }
     },
 
@@ -149,7 +149,7 @@
           "$other": {
             ".validate": false
           }
-        },
+        }
       }
     },
 
