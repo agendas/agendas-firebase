@@ -12,6 +12,8 @@ const allowedScopes = {
   "agenda-share": "Share your agendas with others"
 };
 
+const defaultTokenExpiration = 604800;
+
 firebase.initializeApp(functions.config().firebase);
 
 exports.ping = functions.https.onRequest(function(req, res) {
@@ -107,7 +109,7 @@ function generateToken(uid, app, scopes) {
       scopesObject[scope] = true;
     });
 
-    var expiration = Date.now() + 3600000;
+    var expiration = Date.now() + (defaultTokenExpiration * 1000);
     return Promise.all([
       firebase.database().ref("/users/" + uid + "/apps/" + app + "/token").set({
         token: token,
@@ -116,7 +118,7 @@ function generateToken(uid, app, scopes) {
       Promise.resolve({
         access_token: token,
         token_type: "bearer",
-        expires_in: 3600
+        expires_in: defaultTokenExpiration
       }),
       firebase.database().ref("/users/" + uid + "/apps/" + app + "/scopes").set(scopesObject),
       firebase.database().ref("/tokens/" + token).set({
@@ -306,6 +308,9 @@ function checkApiCalls(app, resolveArg) {
 };
 
 function startApiCall(req, res) {
+  res.set("Access-Control-Allow-Origin", "*");
+  // res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+
   if (req.query.pretty && req.query.pretty !== "0") {
     req.app.set("json spaces", "  ");
   } else {
@@ -340,18 +345,39 @@ function startApiCall(req, res) {
   });
 };
 
+function send405(res) {
+  if (!res.get("Access-Control-Allow-Origin")) {
+    res.set("Access-Control-Allow-Origin", "*");
+  }
+
+  res.sendStatus(405);
+};
+
+function handleOptionsRequest(req, res, methods) {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", methods.join(", "));
+  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.sendStatus(200);
+}
+
 exports.verify = functions.https.onRequest(function(req, res) {
-  startApiCall(req, res).then(function(token) {
-    res.json({
-      scopes: token.scopes,
-      expires_in: Math.round((token.expiration - Date.now()) / 1000)
+  if (req.method === "GET") {
+    startApiCall(req, res).then(function(token) {
+      res.json({
+        scopes: token.scopes,
+        expires_in: Math.round((token.expiration - Date.now()) / 1000)
+      });
+    }).catch(function(e) {
+      console.log(e);
+      if (!res.headersSent) {
+        res.sendStatus(500);
+      }
     });
-  }).catch(function(e) {
-    console.log(e);
-    if (!res.headersSent) {
-      res.sendStatus(500);
-    }
-  });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET"]);
+  } else {
+    send405(res);
+  }
 });
 
 exports.agendas = functions.https.onRequest(function(req, res) {
@@ -392,8 +418,53 @@ exports.agendas = functions.https.onRequest(function(req, res) {
         res.sendStatus(500);
       }
     });
+  } else if (req.method === "POST") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if (req.body.name && typeof req.body.name !== "string") {
+        res.status(400);
+        res.send("Invalid Name");
+      }
+
+      var ref = firebase.database().ref("/agendas/").push();
+      return Promise.all([
+        ref.key,
+        token.user,
+        ref.set({
+          name: req.body.name || null
+        }),
+      ]);
+    }).then(function(result) {
+      var key = result[0];
+      var user = result[1];
+      var permissions = {};
+      permissions[user] = "editor";
+      return Promise.all([
+        key,
+        user,
+        firebase.database().ref("/permissions/" + key).set(permissions)
+      ]);
+    }).then(function(result) {
+      var key = result[0];
+      return Promise.all([
+        key,
+        firebase.database().ref("/users/" + result[1] + "/agendas/" + key).set(true)
+      ]);
+    }).then(function(result) {
+      res.status(201);
+      res.json({ok: true, id: result[0]});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET", "POST"]);
   } else {
-    res.sendStatus(405);
+    send405(res);
   }
 });
 
@@ -433,8 +504,111 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         console.log(e);
       }
     });
+  } else if (req.method === "PUT") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if (req.body.name && typeof req.body.name !== "string") {
+        res.status(400);
+        res.send("Invalid Name");
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/agendas/" + agenda).set({
+          name: req.body.name || null
+        });
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(result) {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "PATCH") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if (req.body.name && typeof req.body.name !== "string") {
+        res.status(400);
+        res.send("Invalid Name");
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        var ref = firebase.database().ref("/agendas/" + agenda);
+
+        return Promise.all(["name"].filter(function(key) {
+          return req.body[key];
+        }).map(function(key) {
+          return ref.child(key).set(req.body[key]);
+        }));
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(result) {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "DELETE") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      return Promise.all([
+        token.user,
+        firebase.database().ref("/permissions/" + agenda).once("value")
+      ]);
+    }).then(function(result) {
+      var user = result[0];
+      var permissions = result[1];
+
+      if (permissions.child(user).val() === "editor") {
+        var promises = [];
+        permissions.forEach(function(permission) {
+          promises.push(firebase.database().ref("/users/" + permission.key + "/agendas/" + agenda).remove());
+        });
+
+        return Promise.all([
+          firebase.database().ref("/agendas/" + agenda).remove(),
+          firebase.database().ref("/permissions/" + agenda).remove(),
+          firebase.database().ref("/categories/" + agenda).remove(),
+          firebase.database().ref("/tasks/" + agenda).remove(),
+          Promise.all(promises)
+        ]);
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET", "PUT", "PATCH", "DELETE"]);
   } else {
-    res.sendStatus(405);
+    send405(res);
   }
 });
 
@@ -484,9 +658,51 @@ exports.tags = functions.https.onRequest(function(req, res) {
       if (e) {
         console.log(e);
       }
-    })
+    });
+  } else if (req.method === "POST") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if ((req.body.name && typeof req.body.name !== "string") || (req.body.color && typeof req.body.color !== "string") || !(req.body.name || req.body.color)) {
+        res.sendStatus(400);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        var tagRef = firebase.database().ref("/categories/" + agenda).push();
+        return Promise.all([
+          Promise.resolve(tagRef.key),
+          tagRef.set({
+            name: req.body.name || null,
+            color: req.body.color || null
+          })
+        ]);
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(result) {
+      var key = result[0];
+      res.status(201);
+      res.json({ok: true, id: key});
+    }).catch(function(e) {
+      if (!res.headersSent) {
+        res.sendStatus(500);
+      }
+
+      if (e) {
+        console.log(e);
+      }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET", "POST"]);
   } else {
-    res.sendStatus(405);
+    send405(res);
   }
 });
 
@@ -544,6 +760,107 @@ exports.tag = functions.https.onRequest(function(req, res) {
       if (!res.headersSent) { res.sendStatus(500) }
       if (e) { console.log(e) }
     });
+  } else if (req.method === "PUT") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if ((req.body.name && typeof req.body.name !== "string") || (req.body.color && typeof req.body.color !== "string") || !(req.body.name || req.body.color)) {
+        res.sendStatus(400);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/categories/" + agenda).child(tag).once("value");
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(tag) {
+      if (tag.exists()) {
+        return tag.ref.set({
+          name: req.body.name || null,
+          color: req.body.color || null
+        });
+      } else {
+        res.sendStatus(404);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "PATCH") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if ((req.body.name && typeof req.body.name !== "string") || (req.body.color && typeof req.body.color !== "string")) {
+        res.sendStatus(400);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/categories/" + agenda).child(tag).once("value");
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(tag) {
+      if (tag.exists()) {
+        return Promise.all(["name", "color"].filter(function(key) {
+          return req.body[key];
+        }).map(function(key) {
+          return tag.ref.child(key).set(req.body[key]);
+        }));
+      } else {
+        res.sendStatus(404);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "DELETE") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/categories/" + agenda).child(tag).remove();
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET", "PUT", "PATCH", "DELETE"]);
+  } else {
+    send405(res);
   }
 });
 
@@ -610,8 +927,80 @@ exports.tasks = functions.https.onRequest(function(req, res) {
         console.log(e);
       }
     })
+  } else if (req.method === "POST") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if (
+        (req.body.name && typeof req.body.name !== "string") ||
+        (req.body.repeat && typeof req.body.repeat !== "string") ||
+        (req.body.deadline && isNaN(new Date(req.body.deadline).getTime())) ||
+        (req.body.deadlineTime && typeof req.body.deadlineTime !== "boolean") ||
+        (req.body.deadlineTime && !req.body.deadline) ||
+        (req.body.repeat && !req.body.deadline) ||
+        (req.body.repeatEnds && !req.body.repeat) ||
+        (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
+        (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
+        (req.body.notes && typeof req.body.notes !== "string") ||
+        !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.notes)
+      ) {
+        res.sendStatus(400);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        var taskRef = firebase.database().ref("/tasks/" + agenda).push();
+        if (req.body.tags) {
+          var tags = {};
+          req.body.tags.forEach(function(tag) {
+            tags[tag] = true;
+          });
+          return {ref: taskRef, tags: tags};
+        } else {
+          return {ref: taskRef};
+        }
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(result) {
+      var taskRef = result.ref;
+      var tags    = result.tags;
+
+      return Promise.all([
+        Promise.resolve(taskRef.key),
+        taskRef.set({
+          name: req.body.name || null,
+          deadline: req.body.deadline || null,
+          deadlineTime: req.body.deadlineTime || null,
+          repeat: req.body.repeat || null,
+          repeatEnds: req.body.repeatEnds || null,
+          tags: tags,
+          notes: req.body.notes || null
+        })
+      ]);
+    }).then(function(result) {
+      var key = result[0];
+      res.status(201);
+      res.json({ok: true, id: key});
+    }).catch(function(e) {
+      if (!res.headersSent) {
+        res.sendStatus(500);
+      }
+
+      if (e) {
+        console.log(e);
+      }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET", "POST"]);
   } else {
-    res.sendStatus(405);
+    send405(res);
   }
 });
 
@@ -695,5 +1084,161 @@ exports.task = functions.https.onRequest(function(req, res) {
       if (!res.headersSent) { res.sendStatus(500) }
       if (e) { console.log(e) }
     });
+  } else if (req.method === "PUT") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if (
+        (req.body.name && typeof req.body.name !== "string") ||
+        (req.body.repeat && typeof req.body.repeat !== "string") ||
+        (req.body.deadline && isNaN(new Date(req.body.deadline).getTime())) ||
+        (req.body.deadlineTime && typeof req.body.deadlineTime !== "boolean") ||
+        (req.body.deadlineTime && !req.body.deadline) ||
+        (req.body.repeat && !req.body.deadline) ||
+        (req.body.repeatEnds && !req.body.repeat) ||
+        (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
+        (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
+        (req.body.notes && typeof req.body.notes !== "string") ||
+        !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.notes)
+      ) {
+        res.sendStatus(400);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/tasks/" + agenda).child(task).once("value");
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(task) {
+      if (task.exists()) {
+        /* return Promise.all(["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "notes"].filter(function(key) {
+          return req.body[key] !== undefined;
+        }).map(function(key) {
+          if (key === "tags") {
+            var tags = {};
+            req.body.tags.forEach(function(tag) {
+              tags[tag] = true;
+            });
+            return task.ref.child("tags").set(tags);
+          } else {
+            return task.ref.child(key).set(req.body[key]);
+          }
+        })); */
+
+        var tags = null;
+        if (req.body.tags) {
+          tags = {};
+          req.body.tags.forEach(function(tag) {
+            tags[tag] = true;
+          });
+        }
+
+        return task.ref.set({
+          name: req.body.name || null,
+          deadline: req.body.deadline || null,
+          deadlineTime: req.body.deadlineTime || null,
+          repeat: req.body.repeat || null,
+          repeatEnds: req.body.repeatEnds || null,
+          tags: tags,
+          notes: req.body.notes || null
+        })
+      } else {
+        res.sendStatus(404);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "PATCH") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      if (
+        (req.body.name && typeof req.body.name !== "string") ||
+        (req.body.repeat && typeof req.body.repeat !== "string") ||
+        (req.body.deadline && isNaN(new Date(req.body.deadline).getTime())) ||
+        (req.body.deadlineTime && typeof req.body.deadlineTime !== "boolean") ||
+        (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
+        (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
+        (req.body.notes && typeof req.body.notes !== "string")
+      ) {
+        res.sendStatus(400);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/tasks/" + agenda).child(task).once("value");
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function(task) {
+      if (task.exists()) {
+        return Promise.all(["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "notes"].filter(function(key) {
+          return req.body[key] !== undefined;
+        }).map(function(key) {
+          if (key === "tags") {
+            var tags = {};
+            req.body.tags.forEach(function(tag) {
+              tags[tag] = true;
+            });
+            return task.ref.child("tags").set(tags);
+          } else {
+            return task.ref.child(key).set(req.body[key]);
+          }
+        }));
+      } else {
+        res.sendStatus(404);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "DELETE") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["agenda-write"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+
+      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+    }).then(function(permission) {
+      if (permission.val() === "editor") {
+        return firebase.database().ref("/tasks/" + agenda).child(task).remove();
+      } else {
+        res.sendStatus(403);
+        throw null;
+      }
+    }).then(function() {
+      res.status(200);
+      res.json({ok: true});
+    }).catch(function(e) {
+      if (!res.headersSent) { res.sendStatus(500); }
+      if (e) { console.log(e); }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET", "PUT", "PATCH", "DELETE"]);
+  } else {
+    send405(res);
   }
 });
