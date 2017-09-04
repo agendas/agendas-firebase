@@ -22,6 +22,14 @@
         "function": "verify"
       },
       {
+        "source": "/api/v1/email",
+        "function": "email"
+      },
+      {
+        "source": "/api/v1/username",
+        "function": "username"
+      },
+      {
         "source": "/api/v1/agendas",
         "function": "agendas"
       },
@@ -44,6 +52,10 @@
       {
         "source": "/api/v1/tasks/?*/?*",
         "function": "task"
+      },
+      {
+        "source": "/api/v1/revoke/?*",
+        "function": "revoke"
       }
     ]
   },

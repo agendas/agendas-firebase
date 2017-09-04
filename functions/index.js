@@ -7,6 +7,8 @@ const mustache    = require("mustache");
 const crypto      = require("crypto");
 
 const allowedScopes = {
+  "email": "Know your email address",
+  "username-read": "Know your username",
   "agenda-read": "View your agendas, tags, and tasks",
   "agenda-write": "Edit your agendas, tags, and tasks",
   "agenda-share": "Share your agendas with others"
@@ -14,7 +16,12 @@ const allowedScopes = {
 
 const defaultTokenExpiration = 604800;
 
-firebase.initializeApp(functions.config().firebase);
+const serviceAccount = require("./service-account.json");
+
+firebase.initializeApp({
+  credential: firebase.credential.cert(serviceAccount),
+  databaseURL: functions.config().firebase.databaseURL
+});
 
 exports.ping = functions.https.onRequest(function(req, res) {
   res.status(200).send("Pong");
@@ -369,6 +376,58 @@ exports.verify = functions.https.onRequest(function(req, res) {
       });
     }).catch(function(e) {
       console.log(e);
+      if (!res.headersSent) {
+        res.sendStatus(500);
+      }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET"]);
+  } else {
+    send405(res);
+  }
+});
+
+exports.email = functions.https.onRequest(function(req, res) {
+  if (req.method === "GET") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes.email) {
+        res.sendStatus(403);
+        throw null;
+      }
+      return firebase.auth().getUser(token.user);
+    }).then(function(user) {
+      res.status(200);
+      res.json({email: user.email});
+    }).catch(function(e) {
+      if (e) {
+        console.log(e);
+      }
+      if (!res.headersSent) {
+        res.sendStatus(500);
+      }
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["GET"]);
+  } else {
+    send405(res);
+  }
+});
+
+exports.username = functions.https.onRequest(function(req, res) {
+  if (req.method === "GET") {
+    startApiCall(req, res).then(function(token) {
+      if (!token.scopes["username-read"]) {
+        res.sendStatus(403);
+        throw null;
+      }
+      return firebase.database().ref("/users/" + token.user + "/username").once("value");
+    }).then(function(username) {
+      res.status(200);
+      res.json({username: username.val() || false});
+    }).catch(function(e) {
+      if (e) {
+        console.log(e);
+      }
       if (!res.headersSent) {
         res.sendStatus(500);
       }
@@ -1238,6 +1297,44 @@ exports.task = functions.https.onRequest(function(req, res) {
     });
   } else if (req.method === "OPTIONS") {
     handleOptionsRequest(req, res, ["GET", "PUT", "PATCH", "DELETE"]);
+  } else {
+    send405(res);
+  }
+});
+
+exports.revoke = functions.https.onRequest(function(req, res) {
+  var app = path.basename(req.path);
+  if (req.method === "POST") {
+    res.set("Access-Control-Allow-Origin", "*");
+    if (req.get("Authorization") && app) {
+      firebase.auth().verifyIdToken(req.get("Authorization")).catch(function(e) {
+        res.sendStatus(400);
+        console.log(e);
+        throw null;
+      }).then(function(token) {
+        return firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/token/token").once("value");
+      }).then(function(token) {
+        if (token.exists()) {
+          return Promise.all([
+            token.ref.parent.parent.remove(),
+            firebase.database().ref("/tokens/" + token.val()).remove()
+          ]);
+        } else {
+          res.sendStatus(404);
+          throw null;
+        }
+      }).then(function() {
+        res.status(200);
+        res.json({ok: true});
+      }).catch(function(e) {
+        if (!res.headersSent) { res.sendStatus(500); }
+        if (e) { console.log(e); }
+      });
+    } else {
+      res.sendStatus(400);
+    }
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["POST"]);
   } else {
     send405(res);
   }

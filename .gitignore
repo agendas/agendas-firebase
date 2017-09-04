@@ -38,4 +38,5 @@ jspm_packages
 
 # Firebase
 functions/.runtimeconfig.json
+functions/service-account.json
 .firebaserc
