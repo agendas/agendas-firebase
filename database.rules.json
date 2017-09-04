@@ -37,7 +37,12 @@
 							}
             }
           }
-				}
+				},
+        "setupComplete": {
+          ".read": "$uid === auth.uid",
+          ".write": "$uid === auth.uid",
+          ".validate": "newData.val() === true"
+        }
       }
     },
 
