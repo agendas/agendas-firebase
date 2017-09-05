@@ -969,6 +969,9 @@ exports.tasks = functions.https.onRequest(function(req, res) {
           if (task.repeatEnds === "") {
             delete task.repeatEnds;
           }
+          if (task.priority === 0) {
+            delete task.priority;
+          }
           tasks.push(task);
         });
         return tasks;
@@ -1003,8 +1006,9 @@ exports.tasks = functions.https.onRequest(function(req, res) {
         (req.body.repeatEnds && !req.body.repeat) ||
         (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
         (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
+        ((req.body.priority !== undefined || req.body.priority !== null) && typeof req.body.priority !== "number") ||
         (req.body.notes && typeof req.body.notes !== "string") ||
-        !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.notes)
+        !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.priority || req.body.notes)
       ) {
         res.sendStatus(400);
         throw null;
@@ -1040,6 +1044,7 @@ exports.tasks = functions.https.onRequest(function(req, res) {
           repeat: req.body.repeat || null,
           repeatEnds: req.body.repeatEnds || null,
           tags: tags,
+          priority: req.body.priority || null,
           notes: req.body.notes || null
         })
       ]);
@@ -1110,8 +1115,11 @@ exports.task = functions.https.onRequest(function(req, res) {
         if (taskData.repeat === "") {
           delete taskData.repeat;
         }
-        if (task.repeatEnds === "") {
+        if (taskData.repeatEnds === "") {
           delete taskData.repeatEnds;
+        }
+        if (!taskData.priority) {
+          delete taskData.priority;
         }
 
         if (taskData.tags) {
@@ -1160,8 +1168,9 @@ exports.task = functions.https.onRequest(function(req, res) {
         (req.body.repeatEnds && !req.body.repeat) ||
         (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
         (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
+        ((req.body.priority !== undefined || req.body.priority !== null) && typeof req.body.priority !== "number") ||
         (req.body.notes && typeof req.body.notes !== "string") ||
-        !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.notes)
+        !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.priority || req.body.notes)
       ) {
         res.sendStatus(400);
         throw null;
@@ -1206,6 +1215,7 @@ exports.task = functions.https.onRequest(function(req, res) {
           repeat: req.body.repeat || null,
           repeatEnds: req.body.repeatEnds || null,
           tags: tags,
+          priority: req.body.priority || null,
           notes: req.body.notes || null
         })
       } else {
@@ -1233,6 +1243,7 @@ exports.task = functions.https.onRequest(function(req, res) {
         (req.body.deadlineTime && typeof req.body.deadlineTime !== "boolean") ||
         (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
         (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
+        ((req.body.priority !== undefined || req.body.priority !== null) && typeof req.body.priority !== "number") ||
         (req.body.notes && typeof req.body.notes !== "string")
       ) {
         res.sendStatus(400);
@@ -1249,7 +1260,7 @@ exports.task = functions.https.onRequest(function(req, res) {
       }
     }).then(function(task) {
       if (task.exists()) {
-        return Promise.all(["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "notes"].filter(function(key) {
+        return Promise.all(["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "priority", "notes"].filter(function(key) {
           return req.body[key] !== undefined;
         }).map(function(key) {
           if (key === "tags") {

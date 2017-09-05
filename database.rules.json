@@ -151,6 +151,9 @@
               ".validate": "root.child('categories').child($agenda).hasChild($tag) && newData.val() === true"
 						}
           },
+          "priority": {
+            ".validate": "newData.isNumber() && newData.val() > -128 && newData.val() < 128"
+          },
           "$other": {
             ".validate": false
           }
