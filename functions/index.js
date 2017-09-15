@@ -27,6 +27,21 @@ exports.ping = functions.https.onRequest(function(req, res) {
   res.status(200).send("Pong");
 });
 
+function send405(res) {
+  if (!res.get("Access-Control-Allow-Origin")) {
+    res.set("Access-Control-Allow-Origin", "*");
+  }
+
+  res.sendStatus(405);
+};
+
+function handleOptionsRequest(req, res, methods) {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", methods.join(", "));
+  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.sendStatus(200);
+}
+
 exports.authorize = functions.https.onRequest(function(req, res) {
   if (req.method === "GET") {
     if (req.query.response_type === "token") {
@@ -242,6 +257,67 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
   }
 });
 
+exports.newapp = functions.https.onRequest(function(req, res) {
+  if (req.method === "POST") {
+    res.set("Access-Control-Allow-Origin", "*");
+
+    var auth = req.get("Authorization") && req.get("Authorization").split(" ");
+    if ((!auth) || auth[0] !== "Firebase" || !auth[1]) {
+      res.status(401);
+      res.json({ok: false, error: "invalid_auth"});
+      return;
+    }
+
+    firebase.auth().verifyIdToken(auth[1]).catch(function(e) {
+      res.status(401);
+      res.json({ok: false, error: "invalid_auth"});
+      throw e;
+    }).then(function(decodedToken) {
+      return firebase.database().ref("/users/" + decodedToken.uid + "/maxApps").once("value");
+    }).then(function(maxApps) {
+      if (typeof maxApps.val() !== "number" || maxApps.val() === 0) {
+        res.status(403);
+        res.json({ok: false, error: "app_limit_reached"});
+        throw null;
+      } else if (maxApps.val() > 0) {
+        return firebase.database().ref("/users/" + maxApps.ref.parent.key + "/createdApps").once("value").then(function(apps) {
+          if (apps.exists() && apps.numChildren() >= maxApps.val()) {
+            res.status(403);
+            res.json({ok: false, error: "app_limit_reached"});
+            throw null;
+          } else {
+            return maxApps.ref.parent.key;
+          }
+        });
+      } else {
+        return maxApps.ref.parent.key;
+      }
+    }).then(function(uid) {
+      var appKey = firebase.database().ref("/apps/").push().key;
+      return firebase.database().ref("/users/" + uid + "/createdApps/" + appKey).set(true).then(function() {
+        return {key: appKey, uid: uid};
+      });
+    }).then(function(result) {
+      return firebase.database().ref("/apps/" + result.key).set({
+        owner: result.uid,
+        maxCalls: 1000
+      }).then(function() {
+        return result.key;
+      });
+    }).then(function(key) {
+      res.status(201);
+      res.json({ok: true, key: key});
+    }).catch(function(e) {
+      if (e) {console.log(e)}
+      if (!res.headersSent) {res.status(500); res.json({ok: false, error: "server_error"})}
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["POST"]);
+  } else {
+    send405(res);
+  }
+});
+
 function verifyApiToken(token) {
   return firebase.database().ref("/tokens/" + token).once("value").then(function(data) {
     if (data.exists() && new Date(data.val().expiration) > new Date()) {
@@ -352,21 +428,6 @@ function startApiCall(req, res) {
   });
 };
 
-function send405(res) {
-  if (!res.get("Access-Control-Allow-Origin")) {
-    res.set("Access-Control-Allow-Origin", "*");
-  }
-
-  res.sendStatus(405);
-};
-
-function handleOptionsRequest(req, res, methods) {
-  res.set("Access-Control-Allow-Origin", "*");
-  res.set("Access-Control-Allow-Methods", methods.join(", "));
-  res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
-  res.sendStatus(200);
-}
-
 exports.verify = functions.https.onRequest(function(req, res) {
   if (req.method === "GET") {
     startApiCall(req, res).then(function(token) {
@@ -460,7 +521,9 @@ exports.agendas = functions.https.onRequest(function(req, res) {
             return firebase.database().ref("/agendas/" + permission.ref.parent.key).once("value");
           }));
         }).then(function(agendas) {
-          return agendas.map(function(data) {
+          return agendas.filter(function(data) {
+            return data.exists();
+          }).map(function(data) {
             var agenda = data.val();
             agenda.id = data.key;
             return agenda;
@@ -1006,7 +1069,7 @@ exports.tasks = functions.https.onRequest(function(req, res) {
         (req.body.repeatEnds && !req.body.repeat) ||
         (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
         (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
-        ((req.body.priority !== undefined || req.body.priority !== null) && typeof req.body.priority !== "number") ||
+        ((req.body.priority !== undefined && req.body.priority !== null) && typeof req.body.priority !== "number") ||
         (req.body.notes && typeof req.body.notes !== "string") ||
         !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.priority || req.body.notes)
       ) {
@@ -1043,7 +1106,7 @@ exports.tasks = functions.https.onRequest(function(req, res) {
           deadlineTime: req.body.deadlineTime || null,
           repeat: req.body.repeat || null,
           repeatEnds: req.body.repeatEnds || null,
-          tags: tags,
+          tags: tags || null,
           priority: req.body.priority || null,
           notes: req.body.notes || null
         })
@@ -1214,7 +1277,7 @@ exports.task = functions.https.onRequest(function(req, res) {
           deadlineTime: req.body.deadlineTime || null,
           repeat: req.body.repeat || null,
           repeatEnds: req.body.repeatEnds || null,
-          tags: tags,
+          tags: tags || null,
           priority: req.body.priority || null,
           notes: req.body.notes || null
         })

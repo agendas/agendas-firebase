@@ -56,6 +56,10 @@
       {
         "source": "/api/v1/revoke/?*",
         "function": "revoke"
+      },
+      {
+        "source": "/api/v1/newapp",
+        "function": "newapp"
       }
     ]
   },
