@@ -58,8 +58,16 @@
         "function": "revoke"
       },
       {
+        "source": "/api/v1/createdapps",
+        "function": "newapp"
+      },
+      {
         "source": "/api/v1/newapp",
         "function": "newapp"
+      },
+      {
+        "source": "/api/v1/createdapps/?*/secret",
+        "function": "generatesecret"
       }
     ]
   },

@@ -318,6 +318,54 @@ exports.newapp = functions.https.onRequest(function(req, res) {
   }
 });
 
+exports.generatesecret = functions.https.onRequest(function(req, res) {
+  if (req.method === "PUT") {
+    res.set("Access-Control-Allow-Origin", "*");
+
+    var auth = req.get("Authorization") && req.get("Authorization").split(" ");
+    if ((!auth) || auth[0] !== "Firebase" || !auth[1]) {
+      res.status(401);
+      res.json({ok: false, error: "invalid_auth"});
+      return;
+    }
+
+    var app = path.basename(path.dirname(req.path));
+
+    firebase.auth().verifyIdToken(auth[1]).catch(function(e) {
+      res.status(401);
+      res.json({ok: false, error: "invalid_auth"});
+      throw e;
+    }).then(function(decodedToken) {
+      return Promise.all([firebase.database().ref("/apps/" + app + "/owner").once("value"), Promise.resolve(decodedToken.uid)]);
+    }).then(function(results) {
+      var data = results[0];
+      var uid  = results[1];
+      if (data.val() === uid) {
+        return new Promise(function(resolve, reject) {
+          crypto.randomBytes(30, function(err, buf) {
+            err ? reject(err) : resolve(buf.toString("base64").replace("/", "-"));
+          });
+        })
+      } else {
+        res.status(403);
+        res.json({ok: false, error: "forbidden"});
+        throw null;
+      }
+    }).then(function(secret) {
+      return Promise.all([secret, firebase.database().ref("/apps/" + app + "/oauth/secret").set(secret)]);
+    }).then(function(result) {
+      res.json({ok: true, secret: result[0]});
+    }).catch(function(e) {
+      if (e) {console.log(e)}
+      if (!res.headersSent) {res.status(500); res.json({ok: false, error: "server_error"})}
+    });
+  } else if (req.method === "OPTIONS") {
+    handleOptionsRequest(req, res, ["PUT"]);
+  } else {
+    send405(res);
+  }
+});
+
 function verifyApiToken(token) {
   return firebase.database().ref("/tokens/" + token).once("value").then(function(data) {
     if (data.exists() && new Date(data.val().expiration) > new Date()) {
@@ -1412,4 +1460,8 @@ exports.revoke = functions.https.onRequest(function(req, res) {
   } else {
     send405(res);
   }
+});
+
+exports.setMaxApps = functions.auth.user().onCreate(function(event) {
+  return firebase.database("/users/" + event.data.uid + "/maxApps").set(10);
 });

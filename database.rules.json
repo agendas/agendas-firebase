@@ -17,6 +17,7 @@
         "createdApps": {
           ".read": "$uid === auth.uid",
           "$app": {
+            ".write": "!(root.child('apps').child($app).exists() || newData.exists())",
             ".validate": "newData.isBoolean() && newData.val() === true"
           }
         },
@@ -42,6 +43,11 @@
           ".read": "$uid === auth.uid",
           ".write": "$uid === auth.uid",
           ".validate": "newData.val() === true"
+        },
+        "isDeveloper": {
+          ".read": "$uid === auth.uid",
+          ".write": "$uid === auth.uid",
+          ".validate": "newData.val() === true"
         }
       }
     },
@@ -58,10 +64,13 @@
           ".write": "data.parent().child('owner').val() === auth.uid"
         },
         "oauth": {
-          "redirect": {
+          "redirectURL": {
             ".write": "data.parent().parent().child('owner').val() === auth.uid",
             ".validate": "newData.isString() && newData.val().length < 1000"
-					}
+					},
+          "secret": {
+            ".write": "data.parent().parent().child('owner').val() === auth.uid && !newData.exists()"
+          }
         },
         ".read": "data.child('owner').val() === auth.uid",
         ".write": "root.child('users').child(auth.uid).child('createdApps').hasChild($app) && !newData.exists()"
