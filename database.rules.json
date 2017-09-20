@@ -24,6 +24,23 @@
         "maxApps": {
           ".read": "$uid === auth.uid"
 				},
+        "maxAppsRequest": {
+          ".read": "$uid === auth.uid",
+          ".write": "$uid === auth.uid",
+          ".validate": "newData.hasChildren(['email', 'amount', 'reason'])",
+          "email": {
+            ".validate": "newData.isString() && newData.val().length < 200"
+          },
+          "amount": {
+            ".validate": "newData.isNumber()"
+          },
+          "reason": {
+            ".validate": "newData.isString() && newData.val().length <= 1000"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
         "apps": {
           ".read": "$uid === auth.uid",
           ".validate": "newData.hasChildren()",
@@ -36,6 +53,9 @@
               "$scope": {
                 ".validate": "newData.isBoolean() && newData.val() === true"
 							}
+            },
+            "$other": {
+              ".validate": false
             }
           }
 				},
