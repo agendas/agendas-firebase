@@ -72,6 +72,22 @@
             ".write": "data.parent().parent().child('owner').val() === auth.uid && !newData.exists()"
           }
         },
+        "request": {
+          ".write": "data.parent().child('owner').val() === auth.uid",
+          ".validate": "newData.hasChildren(['email', 'amount', 'reason'])",
+          "email": {
+            ".validate": "newData.isString() && newData.val().length < 200"
+          },
+          "amount": {
+            ".validate": "newData.isNumber()"
+          },
+          "reason": {
+            ".validate": "newData.isString() && newData.val().length <= 1000"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
         ".read": "data.child('owner').val() === auth.uid",
         ".write": "root.child('users').child(auth.uid).child('createdApps').hasChild($app) && !newData.exists()"
       }
