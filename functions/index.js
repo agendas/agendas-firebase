@@ -1465,3 +1465,13 @@ exports.revoke = functions.https.onRequest(function(req, res) {
 exports.setMaxApps = functions.auth.user().onCreate(function(event) {
   return firebase.database("/users/" + event.data.uid + "/maxApps").set(10);
 });
+
+exports.setMaxApps2 = functions.database.ref("/users/{user}/isDeveloper").onWrite(function(event) {
+  if (event.data.val()) {
+    return event.data.adminRef.parent.child("maxApps").once("value").then(function(value) {
+      if (!value.exists()) {
+        return value.ref.set(10);
+      }
+    })
+  }
+});
