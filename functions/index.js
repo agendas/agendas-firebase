@@ -44,7 +44,7 @@ function handleOptionsRequest(req, res, methods) {
 
 exports.authorize = functions.https.onRequest(function(req, res) {
   if (req.method === "GET") {
-    if (req.query.response_type === "token") {
+    if (req.query.response_type === "token" || req.query.response_type === "code") {
       firebase.database().ref("/apps/" + req.query.client_id).once("value").then(function(data) {
         if (data.exists()) {
           return {app: data.val(), id: data.key};
@@ -211,25 +211,71 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
             return {generateToken: true, uid: results[1]};
           }
         }).then(function(result) {
-          if (result.generateToken) {
-            return generateToken(result.uid, req.body.client_id, scopes);
-          } else {
-            return firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/token").once("value").then(function(data) {
-              if (!data.exists()) {
-                return generateToken(result.uid, req.body.client_id, scopes);
-              } else if (new Date(data.val().expiration) <= new Date()) {
-                return firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/token").remove().then(function() {
-                  return firebase.database().ref("/tokens/" + data.val().token).remove();
-                }).then(function() {
+          if (req.body.response_type === "token") {
+            if (result.generateToken) {
+              return generateToken(result.uid, req.body.client_id, scopes);
+            } else {
+              return firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/token").once("value").then(function(data) {
+                if (!data.exists()) {
                   return generateToken(result.uid, req.body.client_id, scopes);
-                });
-              } else {
-                return {
-                  access_token: data.val().token,
-                  token_type: "bearer",
-                  expires_in: Math.round((new Date(data.val().expiration).getTime() - Date.now()) / 1000)
-                };
+                } else if (new Date(data.val().expiration) <= new Date()) {
+                  return firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/token").remove().then(function() {
+                    return firebase.database().ref("/tokens/" + data.val().token).remove();
+                  }).then(function() {
+                    return generateToken(result.uid, req.body.client_id, scopes);
+                  });
+                } else {
+                  return {
+                    access_token: data.val().token,
+                    token_type: "bearer",
+                    expires_in: Math.round((new Date(data.val().expiration).getTime() - Date.now()) / 1000)
+                  };
+                }
+              });
+            }
+          } else {
+            return Promise.all([
+              new Promise(function(resolve, reject) {
+                if (result.generateToken) {
+                  var scopesObject = {};
+                  scopes.forEach(function(scope) {
+                    scopesObject[scope] = true;
+                  });
+                  firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/scopes").set(scopesObject).then(resolve).catch(reject);
+                } else {
+                  resolve();
+                }
+              }),
+              Promise.all([
+                new Promise(function(resolve, reject) {
+                  crypto.randomBytes(15, function(err, buf) {
+                    err ? reject(err) : resolve(buf.toString("base64").replace("/", "-"));
+                  });
+                }),
+                firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/code").once("value").then(function(data) {
+                  if (data.exists()) {
+                    return firebase.database().ref("/codes/" + data.val()).remove()
+                  }
+                })
+              ]).then(function(results) {
+                var code = results[0];
+                var expiration = new Date(Date.now() + 600);
+                return Promise.all([
+                  Promise.resolve({code: code}),
+                  firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/code").set(code),
+                  firebase.database().ref("/codes/" + code).set({
+                    expiration: expiration,
+                    app: req.body.client_id,
+                    user: result.uid
+                  })
+                ]);
+              })
+            ]).then(function(result) {
+              var query = result[1][0];
+              if (req.body.state) {
+                query.state = req.body.state;
               }
+              return query;
             });
           }
         }).then(function(query) {
@@ -1434,17 +1480,18 @@ exports.revoke = functions.https.onRequest(function(req, res) {
         console.log(e);
         throw null;
       }).then(function(token) {
-        return firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/token/token").once("value");
-      }).then(function(token) {
-        if (token.exists()) {
-          return Promise.all([
-            token.ref.parent.parent.remove(),
-            firebase.database().ref("/tokens/" + token.val()).remove()
-          ]);
-        } else {
-          res.sendStatus(404);
-          throw null;
-        }
+        return Promise.all([
+          firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/token/token").once("value"),
+          firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/code").once("value")
+        ]);
+      }).then(function(result) {
+        var token = result[0];
+        var code  = result[1];
+        return Promise.all([
+          token.ref.parent.parent.remove(),
+          token.exists() && firebase.database().ref("/tokens/" + token.val()).remove(),
+          code.exists() && firebase.database().ref("/codes/" + code.val()).remove()
+        ]);
       }).then(function() {
         res.status(200);
         res.json({ok: true});
