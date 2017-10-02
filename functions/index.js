@@ -55,7 +55,7 @@ exports.authorize = functions.https.onRequest(function(req, res) {
       }).then(function(data) {
         var app = data.app;
         var client_id = data.id;
-        if (app.oauth.redirectURL !== req.query.redirect_url) {
+        if (req.query.response_type === "token" && app.oauth.redirectURL !== req.query.redirect_url) {
           res.status(400);
           res.send("Bad Redirect URL");
           throw null;
@@ -96,8 +96,8 @@ exports.authorize = functions.https.onRequest(function(req, res) {
           scopeText: result.scopes.map(function(scope) {
             return {text: allowedScopes[scope]};
           }),
-          redirectURL: result.app.oauth.redirectURL,
-          redirectURLJSON: JSON.stringify(result.app.oauth.redirectURL),
+          redirectURL: req.query.redirect_url,
+          redirectURLJSON: JSON.stringify(req.query.redirect_url),
           state: result.state,
           clientId: result.id
         });
@@ -186,7 +186,7 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
           var uid  = results[1];
 
           if (data.exists()) {
-            if (data.val().oauth.redirectURL === req.body.redirect_url) {
+            if (req.body.response_type !== "token" || data.val().oauth.redirectURL === req.body.redirect_url) {
               return Promise.all([
                 firebase.database().ref("/users/" + uid + "/apps/" + data.key).once("value"),
                 Promise.resolve(uid)
@@ -248,7 +248,7 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
               }),
               Promise.all([
                 new Promise(function(resolve, reject) {
-                  crypto.randomBytes(15, function(err, buf) {
+                  crypto.randomBytes(18, function(err, buf) {
                     err ? reject(err) : resolve(buf.toString("base64").replace("/", "-"));
                   });
                 }),
@@ -259,14 +259,15 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
                 })
               ]).then(function(results) {
                 var code = results[0];
-                var expiration = new Date(Date.now() + 600);
+                var expiration = new Date(Date.now() + 60 * 1000);
                 return Promise.all([
                   Promise.resolve({code: code}),
                   firebase.database().ref("/users/" + result.uid + "/apps/" + req.body.client_id + "/code").set(code),
                   firebase.database().ref("/codes/" + code).set({
-                    expiration: expiration,
+                    expiration: expiration.toJSON(),
                     app: req.body.client_id,
-                    user: result.uid
+                    user: result.uid,
+                    redirect: req.body.redirect_url
                   })
                 ]);
               })
@@ -298,6 +299,130 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
     } else {
       res.sendStatus(400);
     }
+  } else {
+    res.sendStatus(405);
+  }
+});
+
+exports.token = functions.https.onRequest(function(req, res) {
+  if (req.method === "POST") {
+    if (!((req.body.grant_type === "authorization_code" && req.body.code) || (req.body.grant_type === "refresh_token" && req.body.refresh_token)) || !req.body.client_secret) {
+      res.status(400);
+      res.json({ok: false, error: "invalid_request"});
+      return;
+    }
+
+    var validatePromise = req.body.grant_type === "authorization_code" ? firebase.database().ref("/codes/" + req.body.code).once("value").then(function(data) {
+      data.ref.remove();
+      if (data.exists()) {
+        firebase.database().ref("/users/" + data.val().user + "/apps/" + data.val().app + "/code").remove();
+      }
+      if (
+        data.exists() &&
+        ((req.body.redirect_url || req.body.redirect_uri) === data.val().redirect || !(req.body.redirect_url || req.body.redirect_uri)) &&
+        new Date() <= new Date(data.val().expiration)
+      ) {
+        return {app: data.val().app, user: data.val().user};
+      } else {
+        res.status(400);
+        res.json({ok: false, error: "invalid_grant"});
+        throw null;
+      }
+    }) : firebase.database().ref("/refresh/" + req.body.refresh_token).once("value").then(function(data) {
+      if (data.exists()) {
+        return {app: data.val().app, user: data.val().user};
+      } else {
+        res.status(400);
+        res.json({ok: false, error: "invalid_grant"});
+        throw null;
+      }
+    });
+
+    validatePromise.then(function(grant) {
+      if (req.body.client_id === grant.app) {
+        return Promise.all([firebase.database().ref("/apps/" + grant.app + "/oauth/secret").once("value"), grant]);
+      } else {
+        res.status(400);
+        res.json({ok: false, error: "invalid_client"});
+        throw null;
+      }
+    }).then(function(results) {
+      var secret = results[0];
+      var grant  = results[1];
+      if (secret.val() === req.body.client_secret) {
+        return Promise.all([
+          firebase.database().ref("/users/" + grant.user + "/apps/" + grant.app + "/token").once("value").then(function(token) {
+            token.ref.remove();
+
+            if (token.child("token").exists()) {
+              firebase.database().ref("/tokens/" + token.val().token).remove()
+            }
+
+            return Promise.all([new Promise(function(resolve, reject) {
+              crypto.randomBytes(16, function(err, buf) {
+                err ? reject(err) : resolve(buf.toString("base64").replace("/", "-"));
+              });
+            }), token.ref]);
+          }).then(function(results) {
+            var token      = results[0];
+            var ref        = results[1];
+            var expiration = new Date(Date.now() + 3600 * 1000);
+            return Promise.all([
+              token,
+              ref.set({
+                token: token,
+                expiration: expiration.toJSON()
+              }),
+              firebase.database().ref("/tokens/" + token).set({
+                expiration: expiration.toJSON(),
+                app: grant.app,
+                user: grant.user
+              })
+            ]);
+          }),
+          firebase.database().ref("/users/" + grant.user + "/apps/" + grant.app + "/refresh").once("value").then(function(refresh) {
+            refresh.ref.remove();
+
+            if (refresh.exists()) {
+              firebase.database().ref("/refresh/" + refresh.val()).remove();
+            }
+
+            return Promise.all([new Promise(function(resolve, reject) {
+              crypto.randomBytes(16, function(err, buf) {
+                err ? reject(err) : resolve(buf.toString("base64").replace("/", "-"));
+              });
+            }), refresh.ref]);
+          }).then(function(results) {
+            var refresh    = results[0];
+            var ref        = results[1];
+            return Promise.all([
+              refresh,
+              ref.set(refresh),
+              firebase.database().ref("/refresh/" + refresh).set({
+                app: grant.app,
+                user: grant.user
+              })
+            ]);
+          })
+        ]);
+      } else {
+        res.status(400);
+        res.json({ok: false, error: "invalid_client"});
+        throw null;
+      }
+    }).then(function(tokens) {
+      res.status(200);
+      res.json({access_token: tokens[0][0], refresh_token: tokens[1][0], token_type: "bearer", expires_in: 3600});
+    }).catch(function(e) {
+      if (!res.headersSent) {
+        res.status(500);
+        res.json({ok: false, error: "server_error"});
+      }
+
+      if (e) {
+        console.log(e);
+      }
+    })
   } else {
     res.sendStatus(405);
   }
@@ -1482,15 +1607,18 @@ exports.revoke = functions.https.onRequest(function(req, res) {
       }).then(function(token) {
         return Promise.all([
           firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/token/token").once("value"),
-          firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/code").once("value")
+          firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/code").once("value"),
+          firebase.database().ref("/users/" + token.uid + "/apps/" + app + "/refresh").once("value")
         ]);
       }).then(function(result) {
         var token = result[0];
         var code  = result[1];
+        var refre = result[2];
         return Promise.all([
           token.ref.parent.parent.remove(),
           token.exists() && firebase.database().ref("/tokens/" + token.val()).remove(),
-          code.exists() && firebase.database().ref("/codes/" + code.val()).remove()
+          code.exists() && firebase.database().ref("/codes/" + code.val()).remove(),
+          refre.exists() && firebase.database().ref("/refresh/" + refre.val()).remove()
         ]);
       }).then(function() {
         res.status(200);

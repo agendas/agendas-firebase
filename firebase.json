@@ -18,6 +18,10 @@
         "function": "allowapp"
       },
       {
+        "source": "/api/v1/token",
+        "function": "token"
+      },
+      {
         "source": "/api/v1/verify",
         "function": "verify"
       },
