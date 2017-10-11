@@ -723,34 +723,17 @@ exports.agendas = functions.https.onRequest(function(req, res) {
   if (req.method === "GET") {
     startApiCall(req, res).then(function(token) {
       if (token.scopes["agenda-read"]) {
-        return firebase.database().ref("/users/" + token.user + "/agendas").once("value");
+        return firebase.firestore().collection("agendas").where(token.user, "==", true).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(list) {
-      if (list.exists()) {
-        var user = list.ref.parent.key;
-        return Promise.all(Object.keys(list.val()).map(function(agenda) {
-          return firebase.database().ref("/permissions/" + agenda).child(user).once("value");
-        })).then(function(permissions) {
-          return Promise.all(permissions.filter(function(permission) {
-            return permission.exists();
-          }).map(function(permission) {
-            return firebase.database().ref("/agendas/" + permission.ref.parent.key).once("value");
-          }));
-        }).then(function(agendas) {
-          return agendas.filter(function(data) {
-            return data.exists();
-          }).map(function(data) {
-            var agenda = data.val();
-            agenda.id = data.key;
-            return agenda;
-          });
-        });
-      } else {
-        return [];
-      }
+      var agendas = [];
+      list.forEach(function(agenda) {
+        agendas.push({name: agenda.data().name, id: agenda.id});
+      });
+      return agendas;
     }).then(function(agendas) {
       res.json(agendas);
     }).catch(function(e) {
@@ -771,33 +754,13 @@ exports.agendas = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      var ref = firebase.database().ref("/agendas/").push();
-      return Promise.all([
-        ref.key,
-        token.user,
-        ref.set({
-          name: req.body.name || null
-        }),
-      ]);
-    }).then(function(result) {
-      var key = result[0];
-      var user = result[1];
-      var permissions = {};
-      permissions[user] = "editor";
-      return Promise.all([
-        key,
-        user,
-        firebase.database().ref("/permissions/" + key).set(permissions)
-      ]);
-    }).then(function(result) {
-      var key = result[0];
-      return Promise.all([
-        key,
-        firebase.database().ref("/users/" + result[1] + "/agendas/" + key).set(true)
-      ]);
-    }).then(function(result) {
+      var agenda = {name: req.body.name, permissions: {}};
+      agenda[token.user] = true;
+      agenda.permissions[token.user] = {manage: true, complete_tasks: true, edit_tasks: true, edit_tags: true};
+      return firebase.firestore().collection("agendas").add(agenda);
+    }).then(function(ref) {
       res.status(201);
-      res.json({ok: true, id: result[0]});
+      res.json({ok: true, id: ref.id});
     }).catch(function(e) {
       if (!res.headersSent) { res.sendStatus(500); }
       if (e) { console.log(e); }
@@ -808,6 +771,33 @@ exports.agendas = functions.https.onRequest(function(req, res) {
     send405(res);
   }
 });
+
+var deleteBatch = function(query, batchSize) {
+  return query.get().then(function(data) {
+    if (data.size < 1) {
+      return 0;
+    }
+
+    var batch = firebase.firestore().batch();
+    data.forEach(function(doc) {
+      batch.delete(doc.ref);
+    });
+
+    return batch.commit().then(function() {
+      return data.size;
+    });
+  }).then(function(count) {
+    if (count >= batchSize) {
+      return $timeout(undefined, 0, false).then(function() {
+        return deleteBatch(query, batchSize);
+      });
+    }
+  });
+};
+var deleteCollection = function(collection) {
+  var batchSize = 1000;
+  return deleteBatch(collection.limit(batchSize), batchSize);
+};
 
 exports.agenda = functions.https.onRequest(function(req, res) {
   var agenda = path.basename(req.path);
@@ -820,22 +810,22 @@ exports.agenda = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda) {
-        return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
       } else {
         res.status(400);
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(data) {
-      if (data.exists()) {
-        return firebase.database().ref("/agendas/" + agenda).once("value");
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user]) {
+        return {name: data.data().name, id: data.id};
       } else {
         res.sendStatus(403);
         throw null;
       }
-    }).then(function(data) {
-      var agenda = data.val();
-      agenda.id  = data.key;
+    }).then(function(agenda) {
       res.json(agenda);
     }).catch(function(e) {
       if (!res.headersSent) {
@@ -857,11 +847,13 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/agendas/" + agenda).set({
-          name: req.body.name || null
+      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].manage) {
+        return data.ref.update({
+          name: req.body.name || firebase.firestore.FieldValue.delete()
         });
       } else {
         res.sendStatus(403);
@@ -886,16 +878,18 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        var ref = firebase.database().ref("/agendas/" + agenda);
-
-        return Promise.all(["name"].filter(function(key) {
+      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].manage) {
+        var update = {};
+        ["name"].filter(function(key) {
           return req.body[key];
-        }).map(function(key) {
-          return ref.child(key).set(req.body[key]);
-        }));
+        }).forEach(function(key) {
+          update[key] = req.body[key];
+        });
+        return data.ref.update(update);
       } else {
         res.sendStatus(403);
         throw null;
@@ -914,31 +908,27 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return Promise.all([
-        token.user,
-        firebase.database().ref("/permissions/" + agenda).once("value")
-      ]);
+      if (req.body.name && typeof req.body.name !== "string") {
+        res.status(400);
+        res.send("Invalid Name");
+      }
+
+      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
     }).then(function(result) {
       var user = result[0];
-      var permissions = result[1];
-
-      if (permissions.child(user).val() === "editor") {
-        var promises = [];
-        permissions.forEach(function(permission) {
-          promises.push(firebase.database().ref("/users/" + permission.key + "/agendas/" + agenda).remove());
-        });
-
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].manage) {
         return Promise.all([
-          firebase.database().ref("/agendas/" + agenda).remove(),
-          firebase.database().ref("/permissions/" + agenda).remove(),
-          firebase.database().ref("/categories/" + agenda).remove(),
-          firebase.database().ref("/tasks/" + agenda).remove(),
-          Promise.all(promises)
+          data.ref,
+          deleteCollection(data.ref.collection("tasks")),
+          deleteCollection(data.ref.collection("tags"))
         ]);
       } else {
         res.sendStatus(403);
         throw null;
       }
+    }).then(function(result) {
+      return result[0].delete();
     }).then(function() {
       res.status(200);
       res.json({ok: true});
@@ -964,31 +954,29 @@ exports.tags = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda) {
-        return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
       } else {
         res.status(400);
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(permission) {
-      if (permission.exists()) {
-        return firebase.database().ref("/categories/" + agenda).once("value");
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user]) {
+        return data.ref.collection("tags").get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(data) {
-      if (data.exists()) {
-        var categories = [];
-        data.forEach(function(child) {
-          var category = child.val();
-          category.id  = child.key;
-          categories.push(category);
-        });
-        return categories;
-      } else {
-        return [];
-      }
+      var categories = [];
+      data.forEach(function(child) {
+        var category = child.data();
+        category.id  = child.id;
+        categories.push(category);
+      });
+      return categories;
     }).then(function(categories) {
       res.json(categories);
     }).catch(function(e) {
@@ -1012,25 +1000,28 @@ exports.tags = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        var tagRef = firebase.database().ref("/categories/" + agenda).push();
-        return Promise.all([
-          Promise.resolve(tagRef.key),
-          tagRef.set({
-            name: req.body.name || null,
-            color: req.body.color || null
-          })
-        ]);
+      if (agenda) {
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+      } else {
+        res.status(400);
+        res.send("Missing Agenda");
+        throw null;
+      }
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tags) {
+        return data.ref.collection("tags").add({
+          name: req.body.name || null,
+          color: req.body.color || null
+        });
       } else {
         res.sendStatus(403);
         throw null;
       }
-    }).then(function(result) {
-      var key = result[0];
+    }).then(function(ref) {
       res.status(201);
-      res.json({ok: true, id: key});
+      res.json({ok: true, id: ref.id});
     }).catch(function(e) {
       if (!res.headersSent) {
         res.sendStatus(500);
@@ -1059,7 +1050,7 @@ exports.tag = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda && tag) {
-        return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
       } else if (agenda) {
         res.status(400);
         res.send("Missing Tag");
@@ -1069,20 +1060,22 @@ exports.tag = functions.https.onRequest(function(req, res) {
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(permission) {
-      if (permission.exists()) {
-        return firebase.database().ref("/categories/" + agenda).child(tag).once("value");
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user]) {
+        return data.ref.collection("tags").doc(tag).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(data) {
-      if (data.exists()) {
-        var tagData = data.val();
-        tagData.id = data.key;
+      if (data.exists) {
+        var tagData = data.data();
+        tagData.id = data.id;
         return Promise.all([
           Promise.resolve(tagData),
-          firebase.database().ref("/tasks/" + agenda).orderByChild("tags/" + tagData.id).equalTo(true).once("value")
+          firebase.firestore().collection("agendas").doc(agenda).collection("tasks").where("tags." + data.id, "==", true).get()
         ]);
       } else {
         res.sendStatus(404);
@@ -1092,8 +1085,8 @@ exports.tag = functions.https.onRequest(function(req, res) {
       var tagData = results[0];
       tagData.tasks = [];
       results[1].forEach(function(data) {
-        var task = data.val();
-        task.id  = data.key;
+        var task = data.data();
+        task.id  = data.id;
         tagData.tasks.push(task);
       });
       res.json(tagData);
@@ -1113,16 +1106,28 @@ exports.tag = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/categories/" + agenda).child(tag).once("value");
+      if (agenda && tag) {
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+      } else if (agenda) {
+        res.status(400);
+        res.send("Missing Tag");
+        throw null;
+      } else {
+        res.status(400);
+        res.send("Missing Agenda");
+        throw null;
+      }
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tags) {
+        return data.ref.collection("tags").doc(tag).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(tag) {
-      if (tag.exists()) {
+      if (tag.exists) {
         return tag.ref.set({
           name: req.body.name || null,
           color: req.body.color || null
@@ -1150,21 +1155,35 @@ exports.tag = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/categories/" + agenda).child(tag).once("value");
+      if (agenda && tag) {
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+      } else if (agenda) {
+        res.status(400);
+        res.send("Missing Tag");
+        throw null;
+      } else {
+        res.status(400);
+        res.send("Missing Agenda");
+        throw null;
+      }
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tags) {
+        return data.ref.collection("tags").doc(tag).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(tag) {
-      if (tag.exists()) {
-        return Promise.all(["name", "color"].filter(function(key) {
-          return req.body[key];
-        }).map(function(key) {
-          return tag.ref.child(key).set(req.body[key]);
-        }));
+      if (tag.exists) {
+        var update = {};
+        ["name", "color"].filter(function(key) {
+          return req.body[key] !== undefined;
+        }).forEach(function(key) {
+          update[key] = req.body[key] || firebase.firestore.FieldValue.delete();
+        });
+        return tag.ref.update(update);
       } else {
         res.sendStatus(404);
         throw null;
@@ -1216,50 +1235,51 @@ exports.tasks = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda) {
-        return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
       } else {
         res.status(400);
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(permission) {
-      if (permission.exists()) {
-        return firebase.database().ref("/tasks/" + agenda).once("value");
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user]) {
+        return data.ref.collection("tasks").get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(data) {
-      if (data.exists()) {
-        var tasks = [];
-        data.forEach(function(child) {
-          var task = child.val();
-          task.id  = child.key;
-          if (task.category) {
-            if (!task.tags) {
-              task.tags = {};
-              task.tags[task.category] = true;
-            }
-            delete task.category;
+      var tasks = [];
+      data.forEach(function(child) {
+        var task = child.data();
+        task.id  = child.id;
+        if (task.deadline) {
+          task.deadline = task.deadline.toJSON();
+        }
+        if (task.deadlineTime && !task.deadline) {
+          delete task.deadlineTime;
+        }
+        if (task.repeat === "") {
+          delete task.repeat;
+        }
+        if (task.repeatEnds === "") {
+          delete task.repeatEnds;
+        } else if (task.repeatEnds) {
+          task.repeatEnds = task.repeatEnds.toJSON();
+        }
+        if (task.priority === 0) {
+          delete task.priority;
+        }
+        Object.keys(task).forEach(function(key) {
+          if (task[key] === null) {
+            delete task[key];
           }
-          if (task.deadlineTime && !task.deadline) {
-            delete task.deadlineTime;
-          }
-          if (task.repeat === "") {
-            delete task.repeat;
-          }
-          if (task.repeatEnds === "") {
-            delete task.repeatEnds;
-          }
-          if (task.priority === 0) {
-            delete task.priority;
-          }
-          tasks.push(task);
         });
-        return tasks;
-      } else {
-        return [];
-      }
+        tasks.push(task);
+      });
+      return tasks;
     }).then(function(tasks) {
       res.json(tasks);
     }).catch(function(e) {
@@ -1296,18 +1316,19 @@ exports.tasks = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        var taskRef = firebase.database().ref("/tasks/" + agenda).push();
+      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tasks) {
         if (req.body.tags) {
           var tags = {};
           req.body.tags.forEach(function(tag) {
             tags[tag] = true;
           });
-          return {ref: taskRef, tags: tags};
+          return {ref: data.ref.collection("tasks"), tags: tags};
         } else {
-          return {ref: taskRef};
+          return {ref: data.ref.collection("tasks")};
         }
       } else {
         res.sendStatus(403);
@@ -1317,23 +1338,20 @@ exports.tasks = functions.https.onRequest(function(req, res) {
       var taskRef = result.ref;
       var tags    = result.tags;
 
-      return Promise.all([
-        Promise.resolve(taskRef.key),
-        taskRef.set({
-          name: req.body.name || null,
-          deadline: req.body.deadline || null,
-          deadlineTime: req.body.deadlineTime || null,
-          repeat: req.body.repeat || null,
-          repeatEnds: req.body.repeatEnds || null,
-          tags: tags || null,
-          priority: req.body.priority || null,
-          notes: req.body.notes || null
-        })
-      ]);
-    }).then(function(result) {
-      var key = result[0];
+      return taskRef.add({
+        name: req.body.name || null,
+        completed: !!req.body.completed,
+        deadline: req.body.deadline ? new Date(req.body.deadline) : null,
+        deadlineTime: req.body.deadlineTime || null,
+        repeat: req.body.repeat || null,
+        repeatEnds: req.body.repeatEnds ? new Date(req.body.repeatEnds) : null,
+        tags: tags || null,
+        priority: req.body.priority || null,
+        notes: req.body.notes || null
+      });
+    }).then(function(ref) {
       res.status(201);
-      res.json({ok: true, id: key});
+      res.json({ok: true, id: ref.id});
     }).catch(function(e) {
       if (!res.headersSent) {
         res.sendStatus(500);
@@ -1362,7 +1380,7 @@ exports.task = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda && task) {
-        return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
       } else if (agenda) {
         res.status(400);
         res.send("Missing Task");
@@ -1372,25 +1390,20 @@ exports.task = functions.https.onRequest(function(req, res) {
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(permission) {
-      if (permission.exists()) {
-        return firebase.database().ref("/tasks/" + agenda).child(task).once("value");
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user]) {
+        return data.ref.collection("tasks").doc(task).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(data) {
-      if (data.exists()) {
-        var taskData = data.val();
-        taskData.id = data.key;
+      if (data.exists) {
+        var taskData = data.data();
+        taskData.id = data.id;
 
-        if (taskData.category) {
-          if (!taskData.tags) {
-            taskData.tags = {};
-            taskData.tags[task.category] = true;
-          }
-          delete taskData.category;
-        }
         if (taskData.deadlineTime && !taskData.deadline) {
           delete taskData.deadlineTime;
         }
@@ -1404,19 +1417,23 @@ exports.task = functions.https.onRequest(function(req, res) {
           delete taskData.priority;
         }
 
+        Object.keys(taskData).forEach(function(key) {
+          if (taskData[key] === null) {
+            delete taskData[key];
+          }
+        });
+
         if (taskData.tags) {
           return Promise.all(Object.keys(taskData.tags).map(function(tag) {
-            return firebase.database().ref("/categories/" + agenda).child(tag).once("value");
+            return firebase.firestore().collection("agendas").doc(agenda).collection("tags").doc(tag).get();
           })).then(function(tags) {
-            taskData.tags = tags.map(function(data) {
-              var tag = data.val();
-              if (tag) {
-                tag.id = data.key;
-              }
+            taskData.tags = tags.filter(function(tag) {
+              return tag.exists;
+            }).map(function(data) {
+              var tag = data.data();
+              tag.id = data.id;
               return tag;
-            }).filter(function(tag) {
-              return !!tag;
-            });
+            })
 
             return taskData;
           });
@@ -1450,7 +1467,7 @@ exports.task = functions.https.onRequest(function(req, res) {
         (req.body.repeatEnds && !req.body.repeat) ||
         (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
         (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
-        ((req.body.priority !== undefined || req.body.priority !== null) && typeof req.body.priority !== "number") ||
+        ((req.body.priority !== undefined && req.body.priority !== null) && typeof req.body.priority !== "number") ||
         (req.body.notes && typeof req.body.notes !== "string") ||
         !(req.body.name || req.body.deadline || req.body.deadlineTime || req.body.repeat || req.body.repeatEnds || req.body.tags || req.body.priority || req.body.notes)
       ) {
@@ -1458,16 +1475,28 @@ exports.task = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/tasks/" + agenda).child(task).once("value");
+      if (agenda && task) {
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+      } else if (agenda) {
+        res.status(400);
+        res.send("Missing Task");
+        throw null;
+      } else {
+        res.status(400);
+        res.send("Missing Agenda");
+        throw null;
+      }
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tasks) {
+        return data.ref.collection("tasks").doc(task).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(task) {
-      if (task.exists()) {
+      if (task.exists) {
         /* return Promise.all(["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "notes"].filter(function(key) {
           return req.body[key] !== undefined;
         }).map(function(key) {
@@ -1492,10 +1521,11 @@ exports.task = functions.https.onRequest(function(req, res) {
 
         return task.ref.set({
           name: req.body.name || null,
-          deadline: req.body.deadline || null,
+          completed: !!req.body.completed,
+          deadline: req.body.deadline ? new Date(req.body.deadline) : null,
           deadlineTime: req.body.deadlineTime || null,
           repeat: req.body.repeat || null,
-          repeatEnds: req.body.repeatEnds || null,
+          repeatEnds: req.body.repeatEnds ? new Date(req.body.repeatEnds) : null,
           tags: tags || null,
           priority: req.body.priority || null,
           notes: req.body.notes || null
@@ -1525,36 +1555,62 @@ exports.task = functions.https.onRequest(function(req, res) {
         (req.body.deadlineTime && typeof req.body.deadlineTime !== "boolean") ||
         (req.body.repeatEnds && isNaN(new Date(req.body.repeatEnds).getTime())) ||
         (req.body.tags && (typeof req.body.tags === "string" || req.body.tags.length === undefined)) ||
-        ((req.body.priority !== undefined || req.body.priority !== null) && typeof req.body.priority !== "number") ||
+        ((req.body.priority !== undefined && req.body.priority !== null) && typeof req.body.priority !== "number") ||
         (req.body.notes && typeof req.body.notes !== "string")
       ) {
         res.sendStatus(400);
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/tasks/" + agenda).child(task).once("value");
+      if (agenda && task) {
+        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+      } else if (agenda) {
+        res.status(400);
+        res.send("Missing Task");
+        throw null;
+      } else {
+        res.status(400);
+        res.send("Missing Agenda");
+        throw null;
+      }
+    }).then(function(result) {
+      var user = result[0];
+      var data = result[1];
+      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tasks) {
+        return data.ref.collection("tasks").doc(task).get();
       } else {
         res.sendStatus(403);
         throw null;
       }
     }).then(function(task) {
-      if (task.exists()) {
-        return Promise.all(["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "priority", "notes"].filter(function(key) {
+      if (task.exists) {
+        var update = {};
+        ["name", "deadline", "deadlineTime", "repeat", "repeatEnds", "tags", "priority", "notes", "completed"].filter(function(key) {
           return req.body[key] !== undefined;
-        }).map(function(key) {
+        }).forEach(function(key) {
           if (key === "tags") {
-            var tags = {};
-            req.body.tags.forEach(function(tag) {
-              tags[tag] = true;
-            });
-            return task.ref.child("tags").set(tags);
+            if (req.body.tags && req.body.tags.length > 0) {
+              var tags = {};
+              req.body.tags.forEach(function(tag) {
+                tags[tag] = true;
+              });
+              update.tags = tags;
+            } else {
+              update.tags = firebase.firestore.FieldValue.delete();
+            }
+          } else if (key === "completed") {
+            update.completed = !!req.body.completed;
+          } else if (key === "deadline" || key === "repeatEnds") {
+            if (req.body[key]) {
+              update[key] = new Date(req.body[key]);
+            } else {
+              update[key] = firebase.firestore.FieldValue.delete();
+            }
           } else {
-            return task.ref.child(key).set(req.body[key]);
+            update[key] = req.body[key] || firebase.firestore.FieldValue.delete();
           }
-        }));
+        });
+        return task.ref.update(update);
       } else {
         res.sendStatus(404);
         throw null;

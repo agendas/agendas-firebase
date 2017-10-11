@@ -2,7 +2,7 @@
   "name": "agendas-firebase-functions",
   "description": "Firebase Cloud Functions for Agendas",
   "dependencies": {
-    "firebase-admin": "^4.1.4",
+    "firebase-admin": "^5.4.2",
     "firebase-functions": "^0.5.9",
     "mustache": "^2.3.0"
   },

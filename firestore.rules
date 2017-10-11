@@ -1,0 +1,20 @@
+service cloud.firestore {
+  match /databases/{database}/documents {
+    allow read, write: if false;
+    match /agendas/{agenda} {
+      allow read: if resource.data[request.auth.uid] == true;
+      allow create: if request.resource.data[request.auth.uid] == true && request.resource.data.permissions[request.auth.uid].manage == true;
+      allow update, delete: if resource.data.permissions[request.auth.uid].manage == true;
+
+      match /tasks/{task} {
+        allow read: if get(/databases/$(database)/documents/agendas/$(agenda)).data[request.auth.uid] == true;
+        allow write: if get(/databases/$(database)/documents/agendas/$(agenda)).data.permissions[request.auth.uid].edit_tasks == true;
+      }
+
+      match /tags/{tag} {
+        allow read: if get(/databases/$(database)/documents/agendas/$(agenda)).data[request.auth.uid] == true;
+        allow write: if get(/databases/$(database)/documents/agendas/$(agenda)).data.permissions[request.auth.uid].edit_tags == true;
+      }
+    }
+  }
+}
