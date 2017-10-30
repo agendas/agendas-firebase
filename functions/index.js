@@ -754,10 +754,11 @@ exports.agendas = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      var agenda = {name: req.body.name, permissions: {}};
-      agenda[token.user] = true;
-      agenda.permissions[token.user] = {manage: true, complete_tasks: true, edit_tasks: true, edit_tags: true};
-      return firebase.firestore().collection("agendas").add(agenda);
+      return Promise.all([firebase.firestore().collection("agendas").add({name: req.body.name}), token]);
+    }).then(function(results) {
+      var ref = results[0];
+      var token = results[1];
+      return ref.collection("permissions").doc(token.user).set({manage: true, complete_tasks: true, edit_tasks: true, edit_tags: true});
     }).then(function(ref) {
       res.status(201);
       res.json({ok: true, id: ref.id});
@@ -847,12 +848,10 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].manage) {
-        return data.ref.update({
+      return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
+    }).then(function(data) {
+      if (data.exists && data.data().manage) {
+        return firebase.firestore().collection("agendas").doc(agenda).update({
           name: req.body.name || firebase.firestore.FieldValue.delete()
         });
       } else {
@@ -878,18 +877,16 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].manage) {
+      return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
+    }).then(function(data) {
+      if (data.exists && data.data().manage) {
         var update = {};
         ["name"].filter(function(key) {
           return req.body[key];
         }).forEach(function(key) {
           update[key] = req.body[key];
         });
-        return data.ref.update(update);
+        return firebase.firestore().collection("agendas").doc(agenda).update(update);
       } else {
         res.sendStatus(403);
         throw null;
@@ -913,15 +910,15 @@ exports.agenda = functions.https.onRequest(function(req, res) {
         res.send("Invalid Name");
       }
 
-      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].manage) {
+      return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
+    }).then(function(data) {
+      if (data.exists && data.data().manage) {
+        var agenda = firebase.firestore().collection("agendas").doc(agenda);
         return Promise.all([
-          data.ref,
-          deleteCollection(data.ref.collection("tasks")),
-          deleteCollection(data.ref.collection("tags"))
+          agenda,
+          deleteCollection(agenda.collection("tasks")),
+          deleteCollection(agenda.collection("tags")),
+          deleteCollection(agenda.collection("permissions"))
         ]);
       } else {
         res.sendStatus(403);
@@ -1001,17 +998,15 @@ exports.tags = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda) {
-        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+        return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
       } else {
         res.status(400);
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tags) {
-        return data.ref.collection("tags").add({
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tags) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tags").add({
           name: req.body.name || null,
           color: req.body.color || null
         });
@@ -1107,7 +1102,7 @@ exports.tag = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda && tag) {
-        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+        return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
       } else if (agenda) {
         res.status(400);
         res.send("Missing Tag");
@@ -1117,11 +1112,9 @@ exports.tag = functions.https.onRequest(function(req, res) {
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tags) {
-        return data.ref.collection("tags").doc(tag).get();
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tags) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tags").doc(tag).get();
       } else {
         res.sendStatus(403);
         throw null;
@@ -1156,7 +1149,7 @@ exports.tag = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda && tag) {
-        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+        return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
       } else if (agenda) {
         res.status(400);
         res.send("Missing Tag");
@@ -1166,11 +1159,9 @@ exports.tag = functions.https.onRequest(function(req, res) {
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tags) {
-        return data.ref.collection("tags").doc(tag).get();
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tags) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tags").doc(tag).get();
       } else {
         res.sendStatus(403);
         throw null;
@@ -1202,10 +1193,10 @@ exports.tag = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/categories/" + agenda).child(tag).remove();
+      return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
+    }).then(function(data) {
+      if (data.exists && data.val().edit_tags) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tags").doc(tag).delete();
       } else {
         res.sendStatus(403);
         throw null;
@@ -1316,19 +1307,17 @@ exports.tasks = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tasks) {
+      return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tasks) {
         if (req.body.tags) {
           var tags = {};
           req.body.tags.forEach(function(tag) {
             tags[tag] = true;
           });
-          return {ref: data.ref.collection("tasks"), tags: tags};
+          return {ref: firebase.firestore().collection("agendas").doc(agenda).collection("tasks"), tags: tags};
         } else {
-          return {ref: data.ref.collection("tasks")};
+          return {ref: firebase.firestore().collection("agendas").doc(agenda).collection("tasks")};
         }
       } else {
         res.sendStatus(403);
@@ -1476,7 +1465,7 @@ exports.task = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda && task) {
-        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+        return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
       } else if (agenda) {
         res.status(400);
         res.send("Missing Task");
@@ -1486,11 +1475,9 @@ exports.task = functions.https.onRequest(function(req, res) {
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tasks) {
-        return data.ref.collection("tasks").doc(task).get();
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tasks) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tasks").doc(task).get();
       } else {
         res.sendStatus(403);
         throw null;
@@ -1563,7 +1550,7 @@ exports.task = functions.https.onRequest(function(req, res) {
       }
 
       if (agenda && task) {
-        return Promise.all([token.user, firebase.firestore().collection("agendas").doc(agenda).get()]);
+        return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user).get();
       } else if (agenda) {
         res.status(400);
         res.send("Missing Task");
@@ -1573,11 +1560,9 @@ exports.task = functions.https.onRequest(function(req, res) {
         res.send("Missing Agenda");
         throw null;
       }
-    }).then(function(result) {
-      var user = result[0];
-      var data = result[1];
-      if (data.exists && data.data()[user] && data.data().permissions[user] && data.data().permissions[user].edit_tasks) {
-        return data.ref.collection("tasks").doc(task).get();
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tasks) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tasks").doc(task).get();
       } else {
         res.sendStatus(403);
         throw null;
@@ -1629,10 +1614,10 @@ exports.task = functions.https.onRequest(function(req, res) {
         throw null;
       }
 
-      return firebase.database().ref("/permissions/" + agenda).child(token.user).once("value");
-    }).then(function(permission) {
-      if (permission.val() === "editor") {
-        return firebase.database().ref("/tasks/" + agenda).child(task).remove();
+      return firebase.firestore().collection("agendas").doc(agenda).collection("permissions").doc(token.user);
+    }).then(function(data) {
+      if (data.exists && data.data().edit_tasks) {
+        return firebase.firestore().collection("agendas").doc(agenda).collection("tasks").doc(task).delete();
       } else {
         res.sendStatus(403);
         throw null;
