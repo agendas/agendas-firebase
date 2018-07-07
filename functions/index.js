@@ -20,7 +20,7 @@ const serviceAccount = require("./service-account.json");
 
 firebase.initializeApp({
   credential: firebase.credential.cert(serviceAccount),
-  databaseURL: functions.config().firebase.databaseURL
+  databaseURL: JSON.parse(process.env.FIREBASE_CONFIG).databaseURL
 });
 
 exports.ping = functions.https.onRequest(function(req, res) {
@@ -55,7 +55,7 @@ exports.authorize = functions.https.onRequest(function(req, res) {
       }).then(function(data) {
         var app = data.app;
         var client_id = data.id;
-        if (req.query.response_type === "token" && app.oauth.redirectURL !== req.query.redirect_url) {
+        if (req.query.response_type === "token" && app.oauth.redirectURL !== req.query.redirect_uri) {
           res.status(400);
           res.send("Bad Redirect URL");
           throw null;
@@ -96,8 +96,8 @@ exports.authorize = functions.https.onRequest(function(req, res) {
           scopeText: result.scopes.map(function(scope) {
             return {text: allowedScopes[scope]};
           }),
-          redirectURL: req.query.redirect_url,
-          redirectURLJSON: JSON.stringify(req.query.redirect_url),
+          redirectURL: req.query.redirect_uri,
+          redirectURLJSON: JSON.stringify(req.query.redirect_uri),
           state: result.state,
           clientId: result.id
         });
@@ -157,7 +157,7 @@ function generateToken(uid, app, scopes) {
 
 exports.allowapp = functions.https.onRequest(function(req, res) {
   if (req.method === "POST") {
-    if (req.body && req.body.redirect_url && req.body.firebase_token && req.body.response_type && req.body.scopes && req.body.client_id) {
+    if (req.body && req.body.redirect_uri && req.body.firebase_token && req.body.response_type && req.body.scopes && req.body.client_id) {
       var scopes;
       try {
         scopes = JSON.parse(req.body.scopes);
@@ -186,7 +186,7 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
           var uid  = results[1];
 
           if (data.exists()) {
-            if (req.body.response_type !== "token" || data.val().oauth.redirectURL === req.body.redirect_url) {
+            if (req.body.response_type !== "token" || data.val().oauth.redirectURL === req.body.redirect_uri) {
               return Promise.all([
                 firebase.database().ref("/users/" + uid + "/apps/" + data.key).once("value"),
                 Promise.resolve(uid)
@@ -267,7 +267,7 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
                     expiration: expiration.toJSON(),
                     app: req.body.client_id,
                     user: result.uid,
-                    redirect: req.body.redirect_url
+                    redirect: req.body.redirect_uri
                   })
                 ]);
               })
@@ -280,7 +280,7 @@ exports.allowapp = functions.https.onRequest(function(req, res) {
             });
           }
         }).then(function(query) {
-          var redirect = url.parse(req.body.redirect_url);
+          var redirect = url.parse(req.body.redirect_uri);
           redirect.query = query;
           if (req.body.state) {
             redirect.query.state = req.body.state;
