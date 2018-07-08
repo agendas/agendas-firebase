@@ -60,8 +60,8 @@ exports.authorize = functions.https.onRequest(function(req, res) {
           res.send("Bad Redirect URL");
           throw null;
         } else {
-          if (req.body.scope) {
-            var scopes = req.body.scope.split(" ");
+          if (req.query.scope) {
+            var scopes = req.query.scope.split(" ");
 
             var invalidScopes = false;
             for (var scope of scopes) {
