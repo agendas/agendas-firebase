@@ -1,4 +1,4 @@
-const functions   = require('firebase-functions');
+req.body.scopeconst functions   = require('firebase-functions');
 const firebase    = require("firebase-admin");
 const fs          = require("fs");
 const path        = require("path");
@@ -60,8 +60,8 @@ exports.authorize = functions.https.onRequest(function(req, res) {
           res.send("Bad Redirect URL");
           throw null;
         } else {
-          if (req.query.scopes) {
-            var scopes = req.query.scopes.split(",");
+          if (req.body.scope) {
+            var scopes = req.body.scope.split(" ");
 
             var invalidScopes = false;
             for (var scope of scopes) {
@@ -157,10 +157,10 @@ function generateToken(uid, app, scopes) {
 
 exports.allowapp = functions.https.onRequest(function(req, res) {
   if (req.method === "POST") {
-    if (req.body && req.body.redirect_uri && req.body.firebase_token && req.body.response_type && req.body.scopes && req.body.client_id) {
+    if (req.body && req.body.redirect_uri && req.body.firebase_token && req.body.response_type && req.body.scope && req.body.client_id) {
       var scopes;
       try {
-        scopes = JSON.parse(req.body.scopes);
+        scopes = JSON.parse(req.body.scope);
       } catch(e) {
         res.sendStatus(400);
       }
