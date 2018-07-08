@@ -1,4 +1,4 @@
-req.body.scopeconst functions   = require('firebase-functions');
+const functions   = require('firebase-functions');
 const firebase    = require("firebase-admin");
 const fs          = require("fs");
 const path        = require("path");
