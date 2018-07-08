@@ -40,3 +40,5 @@ jspm_packages
 functions/.runtimeconfig.json
 functions/service-account.json
 .firebaserc
+
+.DS_Store
